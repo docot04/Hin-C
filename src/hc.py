@@ -9,7 +9,7 @@ IDENT_START = r"[A-Za-z_\u0900-\u097F]"
 IDENT_CONT = r"[A-Za-z0-9_\u0900-\u097F]"
 
 token_re = re.compile(
-    r'"([^"\\]|\\.)*"'
+    r'"([^"\\]|\\.)*"'   # string literals
     r"|\'([^'\\]|\\.)*\'"  # char literal
     r"|//.*?$"  # line comment
     r"|/\*.*?\*/"  # block comment
@@ -26,10 +26,6 @@ def load_map(json_file="hindi.json"):
 
 
 def translate_code(code, mapping, devanagari=True):
-    """
-    If devanagari=True, map Hindi->C.
-    If devanagari=False, map C->Hindi.
-    """
     if not devanagari:
         mapping = {v: k for k, v in mapping.items()}
 
@@ -49,6 +45,36 @@ def remove_map_include(code):
     return re.sub(r'^\s*#include\s+"hindi\.h"\s*\n?', "", code, flags=re.MULTILINE)
 
 
+def rename_devanagari_identifiers(code):
+    identifier_map = {}
+    var_counter = 1
+    func_counter = 1
+
+    out_parts = []
+    for m in token_re.finditer(code):
+        tok = m.group(0)
+        if tok.startswith('"') or tok.startswith("'") or tok.startswith("//") or tok.startswith("/*"):
+            out_parts.append(tok)
+        elif re.fullmatch(IDENT_START + IDENT_CONT + r"*", tok):
+            if re.search(r"[\u0900-\u097F]", tok):
+                next_index = m.end()
+                is_func = code[next_index:].lstrip().startswith("(")
+                if tok not in identifier_map:
+                    if is_func:
+                        identifier_map[tok] = f"f{func_counter}"
+                        func_counter += 1
+                    else:
+                        identifier_map[tok] = f"var{var_counter}"
+                        var_counter += 1
+                out_parts.append(identifier_map[tok])
+            else:
+                out_parts.append(tok)
+        else:
+            out_parts.append(tok)
+
+    return "".join(out_parts)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python hc.py file.c [!suppress] [!preserve]")
@@ -65,13 +91,13 @@ def main():
     mapping = load_map()
 
     if src.stem.startswith("_"):
-        # Hindi C -> standard C
         out_file = Path("a.c")
         exe_file = Path("a.exe")
 
         code = src.read_text(encoding="utf-8")
         code = remove_map_include(code)
         translated = translate_code(code, mapping, devanagari=True)
+        translated = rename_devanagari_identifiers(translated)  # second pass
 
         out_file.write_text(translated, encoding="utf-8")
         if not silent:
